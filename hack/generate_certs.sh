@@ -28,9 +28,6 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-[ -z "${service}" ] && service=webhook-service
-[ -z "${namespace}" ] && namespace=default
-
 if [ ! -x "$(command -v openssl)" ]; then
     echo "openssl not found"
     exit 1
@@ -45,15 +42,37 @@ fi
 
 echo "creating certs in certsdir ${CERTSDIR} "
 
-# create cakey
-openssl genrsa -out ${CERTSDIR}/ca.key 2048
+cat > ${CERTSDIR}/san.cnf <<EOF
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
 
-# create ca.crt
-openssl req -x509 -new -nodes -key ${CERTSDIR}/ca.key -subj "/C=CN/ST=HB/O=QC/CN=${CN}" -sha256 -days 10000 -out ${CERTSDIR}/ca.crt
+[req_distinguished_name]
+countryName = CN
+countryName_default = CN
+stateOrProvinceName = HB
+stateOrProvinceName_default = HB
+organizationalUnitName = WH
+organizationalUnitName_default = WH
+commonName = ${CN}
+commonName_default = ${CN}
 
-# create server.key
-openssl genrsa -out ${CERTSDIR}/server.key 2048
+[v3_req]
+basicConstraints = CA:TRUE
+keyUsage = digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = ${CN}
+IP.1 = 127.0.0.1
+EOF
+
+# generate ca
+openssl req -x509 -newkey rsa:4096 -keyout ${CERTSDIR}/ca.key -out ${CERTSDIR}/ca.crt -days 10000 -config ${CERTSDIR}/san.cnf -noenc -batch
+
+# generate server.csr
+openssl req -new -keyout ${CERTSDIR}/server.key -out ${CERTSDIR}/server.csr -config ${CERTSDIR}/san.cnf -noenc -batch
 
 # create server.crt
-openssl req -new -sha256 -key ${CERTSDIR}/server.key -subj "/C=CN/ST=HB/O=QC/CN=${CN}" -out ${CERTSDIR}/server.csr
-openssl x509 -req -in ${CERTSDIR}/server.csr -CA ${CERTSDIR}/ca.crt -CAkey ${CERTSDIR}/ca.key -CAcreateserial -out ${CERTSDIR}/server.crt -days 10000 -sha256
+openssl x509 -req -in ${CERTSDIR}/server.csr -CA ${CERTSDIR}/ca.crt -CAkey ${CERTSDIR}/ca.key \
+  -CAcreateserial -out ${CERTSDIR}/server.crt -days 10000 -extensions v3_req -extfile ${CERTSDIR}/san.cnf
